@@ -1,14 +1,11 @@
 set(SOURCES
   EnerCTypeChecker.cpp
-  NodeTyper.h
-  TyperConsumer.cpp
-  TyperConsumer.h
-  TyperVisitor.h
-  )
+)
 
 set(LIBRARIES
   libclang
-  )
+  checkers_common
+)
 
 if( LLVM_ENABLE_PIC )
   set(SHARED_LIBRARY TRUE)
@@ -29,7 +26,6 @@ if( LLVM_ENABLE_PIC )
       LINK_FLAGS "${ENERC_LINK_FLAGS}"
       INSTALL_NAME_DIR "@executable_path/../lib")
   endif()
-
 
   set(ENERC_STATIC_TARGET_NAME EnerCTypeChecker_static)
 else()
