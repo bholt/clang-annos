@@ -17,7 +17,9 @@ namespace {
 
 // The types in the grappa type system.
 typedef enum {
-  GrappaGlobal,
+  GrappaInvalid = -1,
+  GrappaNone = 0,
+  GrappaGlobal
 } GrappaQualifier;
 
 // The typer: assign types to AST nodes.
@@ -34,8 +36,8 @@ public:
 
 private:
   void checkCondition(clang::Expr *cond);
-  GrappaQualifier checkAssignment(GrappaQualifier ltype,
-                                 clang::Expr *expr);
+  GrappaQualifier checkAssignment(GrappaQualifier ltype, clang::Expr *expr);
+  GrappaQualifier checkBinop(GrappaQualifier ltype, clang::Expr *expr);
 };
 
 // Plugin hooks for Clang driver.
@@ -65,44 +67,51 @@ protected:
 
 // Register the plugin.
 static FrontendPluginRegistry::Add<GrappaTypeCheckerAction> X(
-    "enerc-type-checker", "perform Grappa type checking" );
+    "grappa-type-checker", "perform Grappa type checking" );
 
 
 // Assign qualifiers to declarations based on type annotations.
 GrappaQualifier GrappaTyper::typeForQualString(llvm::StringRef s) {
-  if (s.equals("approx")) {
-    return ecApprox;
-  } else if (s.equals("precise")) {
-    return ecPrecise;
+  if (s.equals("global")) {
+    return GrappaGlobal;
   } else {
+    // NOTE: may need to just ignore them so we can use more than one checker at a time
     std::cerr << "INVALID QUALIFIER: " << s.str() << "\n";
-    return ecPrecise;
+    return GrappaInvalid;
   }
 }
 
 // Default type for unannotated declarations.
 GrappaQualifier GrappaTyper::defaultType(clang::Decl *decl) {
-  return ecPrecise;
+  return GrappaNone;
 }
 
-GrappaQualifier GrappaTyper::checkAssignment(GrappaQualifier ltype,
-                                           clang::Expr *expr) {
-  if (ltype == ecPrecise) {
-    if (typeOf(expr) == ecPrecise)
-      return ecPrecise;
-    else {
-      typeError(expr, "precision flow violation");
-      return ecPrecise;
-    }
-  } else
-    return ecApprox;
+GrappaQualifier GrappaTyper::checkBinop(GrappaQualifier ltype, clang::Expr *expr) {
+  if (ltype != typeOf(expr)) {
+    typeError(expr, "Arithmetic between non-global pointer and global pointer.");
+    return GrappaGlobal;
+  } else {
+    return ltype;
+  }
+}
+
+GrappaQualifier GrappaTyper::checkAssignment(GrappaQualifier ltype, clang::Expr *expr) {
+  if (ltype == GrappaGlobal && typeOf(expr) != GrappaGlobal) {
+    typeError(expr, "Assignment of non-global pointer to global pointer.");
+    return GrappaGlobal;
+  } else if (ltype != GrappaGlobal && typeOf(expr) == GrappaGlobal) {
+    typeError(expr, "Assignment of global pointer to non-global pointer.");
+    return GrappaGlobal;
+  } else {
+    return ltype;
+  }
 }
 
 // Give types to expressions.
 GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
   // Tolerate null.
   if (!expr)
-    return ecPrecise;
+    return GrappaNone;
 
   switch ( expr->getStmtClass() ) {
 
@@ -122,13 +131,9 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
   case clang::Stmt::CXXDeleteExprClass:
   case clang::Stmt::OffsetOfExprClass:
   case clang::Stmt::SizeOfPackExprClass:
-    return ecPrecise;
+    return GrappaNone;
 
   // VARIABLE REFERENCES
-//  case clang::Stmt::BlockDeclRefExprClass: {
-//    clang::BlockDeclRefExpr* tex = cast<clang::BlockDeclRefExpr>(expr);
-//    return typeOf(tex->getDecl());
-//  }
   case clang::Stmt::DeclRefExprClass: {
     clang::DeclRefExpr* tex = cast<clang::DeclRefExpr>(expr);
     DEBUG(llvm::errs() << "variable reference");
@@ -138,7 +143,7 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
   }
   case clang::Stmt::DependentScopeDeclRefExprClass: {
     DEBUG(llvm::errs() << "UNSOUND: template argument untypable\n");
-    return ecPrecise;
+    return GrappaNone;
   }
   case clang::Stmt::MemberExprClass: {
     clang::MemberExpr* mex = cast<clang::MemberExpr>(expr);
@@ -194,10 +199,7 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
       case BO_LAnd:
       case BO_LOr:
         DEBUG(llvm::errs() << "arithmetic\n");
-        if (ltype == ecApprox || rtype == ecApprox)
-          return ecApprox;
-        else
-          return ecPrecise;
+        return checkBinop(ltype, bop->getRHS());
 
       case BO_Assign:
       case BO_MulAssign:
@@ -209,33 +211,22 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
       case BO_ShrAssign:
       case BO_AndAssign:
       case BO_XorAssign:
-      case BO_OrAssign:
+      case BO_OrAssign: {
         DEBUG(llvm::errs() << "assignment\n");
         return checkAssignment(ltype, bop->getRHS());
-
-      case BO_Comma:
-        {
-          // Endorsements are encoded as comma expressions!
-          clang::IntegerLiteral *literal =
-              dyn_cast<clang::IntegerLiteral>(bop->getLHS());
-          if (literal && literal->getValue() == TAG_ENDORSEMENT) {
-            // This is an endorsement of the right-hand expression.
-            DEBUG(llvm::errs() << "endorsement\n");
-            return ecPrecise;
-          } else {
-            // An ordinary comma expression.
-            DEBUG(llvm::errs() << "normal comma " << ltype << " " << rtype << "\n");
-            return rtype;
-          }
-        }
-
+      }
+      case BO_Comma: {
+        // An ordinary comma expression.
+        DEBUG(llvm::errs() << "normal comma " << ltype << " " << rtype << "\n");
+        return rtype;
+      }
       case BO_PtrMemD:
       case BO_PtrMemI:
-        DEBUG(llvm::errs() << "UNSOUND: unimplemented: pointer-to-mem\n");
-        return ecPrecise;
+        // TODO: currently not supporting pointers to members (I think we do already in runtime, but should check first)
+        DEBUG(llvm::errs() << "UNSOUND: unimplemented: pointer-to-member\n");
+        return GrappaNone;
     }
   }
-
 
   // UNARY OPERATORS
   case clang::Stmt::UnaryOperatorClass: {
@@ -250,18 +241,13 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
       case UO_Minus:
       case UO_Not:
       case UO_LNot:
-        // arithmetic
-        return argt;
-
       case UO_AddrOf:
       case UO_Deref:
-        // pointer: propagate precision (for now, at least)
         return argt;
-
-      case UO_Real:
+        
+      case UO_Real: // funky complex stuff
       case UO_Imag:
       case UO_Extension:
-        // funky complex stuff
         return argt;
     }
   }
@@ -286,14 +272,14 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
       DEBUG(llvm::errs() << "UNSOUND: could not find callee for ");
       DEBUG(call->dump());
       DEBUG(llvm::errs() << "\n");
-      return ecPrecise;
+      return GrappaInvalid;
     }
 
     // Special cases for libc allocation functions (i.e., permissive
     // "annotations" for the standard library).
     llvm::StringRef funcName = callee->getName();
     if (funcName == "free" || funcName == "memcpy") {
-      return ecPrecise;
+      return GrappaNone;
     }
 
     // Check parameters.
@@ -303,7 +289,7 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
     for (; pi != callee->param_end() && ai != call->arg_end(); ++pi, ++ai) {
       GrappaQualifier paramType = typeOf(*pi);
       GrappaQualifier argType = typeOf(*ai);
-      if (paramType == ecPrecise && argType == ecApprox) {
+      if (paramType != argType) {
         typeError(call, "precision flow violation");
       }
     }
@@ -328,7 +314,7 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
     DEBUG(llvm::errs() << "UNSOUND: unhandled expression kind "
                        << expr->getStmtClass() << "\n");
     // change to getStmtClassName() for name lookup (crashes for some kinds)
-    return ecPrecise;
+    return GrappaNone;
   }
 }
 
@@ -337,40 +323,16 @@ uint32_t GrappaTyper::flattenType(GrappaQualifier type) {
   return (unsigned int)type;
 }
 
-void GrappaTyper::checkCondition(clang::Expr *cond) {
-  // Found a statement with a condition.
-  if (typeOf(cond) == ecApprox) {
-    typeError(cond, "approximate condition");
-  }
-}
-
 // Checking types in statements. (No type assignment here.)
 void GrappaTyper::checkStmt(clang::Stmt *stmt) {
   switch (stmt->getStmtClass()) {
-    // Check for approximate conditions.
-    case clang::Stmt::IfStmtClass:
-      checkCondition(cast<clang::IfStmt>(stmt)->getCond());
-      break;
-    case clang::Stmt::ForStmtClass:
-      checkCondition(cast<clang::ForStmt>(stmt)->getCond());
-      break;
-    case clang::Stmt::DoStmtClass:
-      checkCondition(cast<clang::DoStmt>(stmt)->getCond());
-      break;
-    case clang::Stmt::WhileStmtClass:
-      checkCondition(cast<clang::WhileStmt>(stmt)->getCond());
-      break;
-    case clang::Stmt::SwitchStmtClass:
-      checkCondition(cast<clang::SwitchStmt>(stmt)->getCond());
-      break;
-
     // Check function return type.
     case clang::Stmt::ReturnStmtClass:
       {
         clang::Expr *expr = cast<clang::ReturnStmt>(stmt)->getRetValue();
         if (expr && curFunction) {
-          if (typeOf(expr) == ecApprox && typeOf(curFunction) == ecPrecise) {
-            typeError(expr, "precision flow violation");
+          if (typeOf(expr) != typeOf(curFunction)) {
+            typeError(expr, "Grappa pointer scope mismatch in return type.");
           }
         }
       }
