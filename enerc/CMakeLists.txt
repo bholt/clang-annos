@@ -4,8 +4,11 @@ file(GLOB COMMON_SRC
   "common/*.h"
 )
 
-add_library(checkers_common
+add_clang_library(checkers_common
   ${COMMON_SRC}
+)
+target_link_libraries(checkers_common
+  libclang
 )
 
 include_directories("common")
