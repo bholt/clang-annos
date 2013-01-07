@@ -15,4 +15,5 @@ include_directories("common")
 
 add_subdirectory(checkers/enerc)
 add_subdirectory(checkers/grappa)
+add_subdirectory(test)
 
