@@ -8,7 +8,7 @@ add_clang_library(checkers_common
   ${COMMON_SRC}
 )
 target_link_libraries(checkers_common
-  libclang
+  clangAST
 )
 
 include_directories("common")
