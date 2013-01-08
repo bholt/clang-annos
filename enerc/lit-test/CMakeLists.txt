@@ -10,6 +10,7 @@ set(CLANG_TEST_DEPS
   c-index-test diagtool arcmt-test c-arcmt-test
   clang-check
   llvm-dis llc opt FileCheck count not
+  GrappaTypeChecker
 )
 
 set(CLANG_TEST_PARAMS
