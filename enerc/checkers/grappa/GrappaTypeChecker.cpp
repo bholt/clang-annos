@@ -243,7 +243,7 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
       case UO_LNot:
       case UO_AddrOf:
       case UO_Deref:
-        return argt;
+        return GrappaNone;
         
       case UO_Real: // funky complex stuff
       case UO_Imag:
