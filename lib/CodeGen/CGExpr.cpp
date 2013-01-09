@@ -933,11 +933,16 @@ void CodeGenFunction::addQualData(llvm::Instruction *inst, QualType ty) {
   else
     customQuals = 0;
 
-  std::vector<llvm::Value*> qualVals;
-  qualVals.push_back(llvm::ConstantInt::get(Int32Ty, customQuals, false));
-  llvm::MDNode *qualMD = llvm::MDNode::get(inst->getContext(), qualVals);
-  inst->setMetadata("quals", qualMD);
+  if (customQuals != 0) {
+    std::vector<llvm::Value*> qualVals;
+    qualVals.push_back(llvm::ConstantInt::get(Int32Ty, customQuals, false));
+    llvm::MDNode *qualMD = llvm::MDNode::get(inst->getContext(), qualVals);
+    inst->setMetadata("quals", qualMD);
+  } else {
+    inst->setMetadata("quals", NULL); // clear metadata if no qualifiers
+  }
 }
+
 void CodeGenFunction::addQualData(llvm::Value *value, QualType ty) {
   if (value == NULL)
     return;
