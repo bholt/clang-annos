@@ -3,6 +3,7 @@
 
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Stmt.h"
+#include "clang/AST/Decl.h"
 #include "clang/Frontend/CompilerInstance.h"
 
 class TyperConsumer : public clang::ASTConsumer {
@@ -15,6 +16,7 @@ public:
   virtual void HandleTranslationUnit(clang::ASTContext &Ctx);
 
   void reportError(clang::Stmt* stmt, llvm::StringRef message);
+  void reportError(clang::Decl* stmt, llvm::StringRef message);
 };
 
 #endif

@@ -36,7 +36,10 @@ public:
   void typeError(clang::Stmt* stmt, llvm::StringRef message) {
     controller->reportError(stmt, message);
   }
-
+  void typeError(clang::Decl* decl, llvm::StringRef message) {
+    controller->reportError(decl, message);
+  }
+  
   // Track the current function (called by visitor).
   void setCurFunction(clang::FunctionDecl *fundecl) {
     curFunction = fundecl;

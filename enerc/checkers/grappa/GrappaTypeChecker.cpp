@@ -24,10 +24,12 @@ typedef enum {
 
 // The typer: assign types to AST nodes.
 class GrappaTyper : public NodeTyper<GrappaQualifier> {
+  typedef NodeTyper<GrappaQualifier> _super;
 public:
   virtual GrappaQualifier typeForQualString(llvm::StringRef s);
   virtual GrappaQualifier defaultType(clang::Decl *decl);
   virtual GrappaQualifier typeForExpr(clang::Expr *expr);
+  virtual GrappaQualifier typeForDecl(clang::Decl *decl);
   virtual uint32_t flattenType(GrappaQualifier type);
   virtual void checkStmt(clang::Stmt *stmt);
 
@@ -81,6 +83,26 @@ GrappaQualifier GrappaTyper::typeForQualString(llvm::StringRef s) {
   }
 }
 
+GrappaQualifier GrappaTyper::typeForDecl(clang::Decl* decl) {
+  GrappaQualifier q = _super::typeForDecl(decl);
+  if (q == GrappaGlobal) {
+    QualType t;
+    if (clang::VarDecl* v = dyn_cast<VarDecl>(decl)) {
+      t = v->getType();
+    } else if (clang::FunctionDecl* f = dyn_cast<FunctionDecl>(decl)) {
+      t = f->getResultType();
+    } else {
+      typeError(decl, "invalid qualifier: 'global' can only go on variable declarations\n");
+    }
+    if (t.getTypePtr()->isPointerType()) {
+      return q;
+    } else {
+      typeError(decl, "invalid qualifier: 'global' can only go on pointer declarations\n");
+    }
+  }
+  return q;
+}
+
 // Default type for unannotated declarations.
 GrappaQualifier GrappaTyper::defaultType(clang::Decl *decl) {
   return GrappaNone;
@@ -112,7 +134,7 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
   // Tolerate null.
   if (!expr)
     return GrappaNone;
-
+  
   switch ( expr->getStmtClass() ) {
 
   // LITERALS
@@ -233,6 +255,14 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
     clang::UnaryOperator *uop = llvm::cast<UnaryOperator>(expr);
     GrappaQualifier argt = typeOf(uop->getSubExpr());
     switch (uop->getOpcode()) {
+      case UO_Deref:
+        if (argt == GrappaGlobal) {
+          llvm::errs() << "deref of global\n";
+          return GrappaNone;
+        } else {
+          return GrappaNone;
+        }
+      case UO_AddrOf:
       case UO_PostInc:
       case UO_PostDec:
       case UO_PreInc:
@@ -241,10 +271,6 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
       case UO_Minus:
       case UO_Not:
       case UO_LNot:
-      case UO_AddrOf:
-      case UO_Deref:
-        return GrappaNone;
-        
       case UO_Real: // funky complex stuff
       case UO_Imag:
       case UO_Extension:
@@ -255,11 +281,15 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
 
   // ARRAYS
   case clang::Stmt::ArraySubscriptExprClass: {
-    // Array member has same precision as the array.
     ArraySubscriptExpr* texp = cast<ArraySubscriptExpr>( expr );
-    return typeOf(texp->getBase());
+    GrappaQualifier baseT = typeOf(texp->getBase());
+    if (baseT == GrappaGlobal) {
+      llvm::errs() << "deref of global (array)\n";
+      return GrappaNone;
+    } else {
+      return baseT;
+    }
   }
-
 
   // FUNCTION CALLS
   case clang::Stmt::CXXMemberCallExprClass: 
@@ -290,7 +320,7 @@ GrappaQualifier GrappaTyper::typeForExpr(clang::Expr *expr) {
       GrappaQualifier paramType = typeOf(*pi);
       GrappaQualifier argType = typeOf(*ai);
       if (paramType != argType) {
-        typeError(call, "precision flow violation");
+        typeError(call, "invalid parameter in call expression");
       }
     }
 
@@ -332,7 +362,7 @@ void GrappaTyper::checkStmt(clang::Stmt *stmt) {
         clang::Expr *expr = cast<clang::ReturnStmt>(stmt)->getRetValue();
         if (expr && curFunction) {
           if (typeOf(expr) != typeOf(curFunction)) {
-            typeError(expr, "Grappa pointer scope mismatch in return type.");
+            typeError(expr, "global pointer mismatch in return type.");
           }
         }
       }
